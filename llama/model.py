@@ -296,12 +296,60 @@ class Attention(nn.Module):
         keys = keys.transpose(1, 2) # (bs, n_local_heads, cache_len + seqlen, head_dim)
         values = values.transpose(1, 2) # (bs, n_local_heads, cache_len + seqlen, head_dim)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+        
+
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
+
+        
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+
+        #      Currrent mask is only for autoregressive, ie, masks future tokens
+        #      #TODO: Add mask over scores to only attend w + w' tokens
+        #      w tokens are from the recent window
+        #      w' token from the prime tokens suggested by recent window
+
+        attn_mask = get_mask(scores)
+
+        scores = scores * attn_mask
+
+
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
+    
+    def get_mask(scores,
+                 WIN_SIZE=30,
+                 SIM_THRESH=0.5):
+        
+        init_mask = torch.full(size=(scores.shape[2],scores.shape[2]),fill_value=float(0)) # (seq_len, seq_len)
+
+        cache_len = scores.shape[-1] - scores.shape[-2] #cache_len
+        cache_mask = torch.zeros(size=(scores.shape[2],cache_len),device=scores.device) # (seq_len,cache_len)
+        
+        init_mask = torch.hstack((cache_mask,init_mask)) #(seq_len, cache_len + seq_len)
+
+        # for each row, build the mask for attention
+        for i in range(init_mask.shape[0]):
+            window_scores = scores[i,min(cache_len+i-WIN_SIZE,0):cache_len+i]
+            window_idx = torch.arange(min(cache_len+i-WIN_SIZE,0),cache_len+i)
+
+            init_mask[i,window_idx] = 1.0 #attend to all window tokens 
+            
+            #TODO: select only topk from the sliding window ie,
+            # _ , window_idx = torch.topk(window_scores,dim=-1,WIN_SIZE//2)
+
+            for consultant in window_idx:
+                if consultant < cache_len:
+                    continue
+                else:
+                    init_mask[i,scores[consultant]>SIM_THRESH] = 1.0 #attend to all tokens for which consultant had similarity > thresh
+        
+        return init_mask
+
+
+        
+
 
 
 class FeedForward(nn.Module):
