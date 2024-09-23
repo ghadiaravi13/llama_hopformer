@@ -29,6 +29,9 @@ class ModelArgs:
 
     max_batch_size: int = 32
     max_seq_len: int = 2048
+    hopformer: bool = False
+    win_size: int = 30
+    sim_thresh: float = 0.5
 
 
 class RMSNorm(torch.nn.Module):
@@ -203,6 +206,9 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
+        self.hopformer = args.hopformer
+        self.win_size = args.win_size
+        self.sim_thresh = args.sim_thresh
 
         self.wq = ColumnParallelLinear(
             args.dim,
@@ -309,10 +315,10 @@ class Attention(nn.Module):
         #      w tokens are from the recent window
         #      w' token from the prime tokens suggested by recent window
 
-        attn_mask = get_mask(scores)
 
-        scores = scores * attn_mask
-
+        if self.hopformer:
+            attn_mask = get_mask(scores,self.win_size,self.sim_thresh)
+            scores = scores * attn_mask
 
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
@@ -322,12 +328,9 @@ class Attention(nn.Module):
                  WIN_SIZE=30,
                  SIM_THRESH=0.5):
         
-        init_mask = torch.full(size=(scores.shape[2],scores.shape[2]),fill_value=float(0)) # (seq_len, seq_len)
-
+        seq_len = scores.shape[2]
         cache_len = scores.shape[-1] - scores.shape[-2] #cache_len
-        cache_mask = torch.zeros(size=(scores.shape[2],cache_len),device=scores.device) # (seq_len,cache_len)
-        
-        init_mask = torch.hstack((cache_mask,init_mask)) #(seq_len, cache_len + seq_len)
+        init_mask = torch.full(size=scores.shape[2:],fill_value=float(0)) # (seqlen, cache_len+seqlen)
 
         # for each row, build the mask for attention
         for i in range(init_mask.shape[0]):
@@ -481,7 +484,10 @@ class Transformer(nn.Module):
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
-
+        self.win_size = params.win_size
+        self.sim_thresh = params.sim_thresh
+        self.hopformer = params.hopformer
+        
         self.tok_embeddings = ParallelEmbedding(
             params.vocab_size, params.dim, init_method=lambda x: x
         )
