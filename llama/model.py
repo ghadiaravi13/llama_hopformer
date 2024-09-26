@@ -255,7 +255,29 @@ class Attention(nn.Module):
                 self.head_dim,
             )
         ).cuda()
+    
+    def get_mask(self, scores, WIN_SIZE, SIM_THRESH):
+        bsz, n_heads, seq_len, total_len = scores.shape
+        cache_len = total_len - seq_len
+        init_mask = torch.zeros_like(scores)
 
+        for i in range(seq_len):
+            window_start = max(0, min(cache_len + i - WIN_SIZE, cache_len))
+            window_end = cache_len + i
+            window_idx = torch.arange(window_start, window_end, device=scores.device)
+
+            init_mask[:, :, i, window_idx] = 1.0  # attend to all window tokens
+
+            for consultant in window_idx:
+                if consultant < cache_len:
+                    continue
+                else:
+                    # Use broadcasting to compare scores across all batches and heads
+                    similar_tokens = scores[:, :, consultant - cache_len] > SIM_THRESH
+                    init_mask[:, :, i] = torch.logical_or(init_mask[:, :, i], similar_tokens)
+
+        return init_mask
+    
     def forward(
         self,
         x: torch.Tensor,
@@ -317,38 +339,14 @@ class Attention(nn.Module):
 
 
         if self.hopformer:
-            attn_mask = get_mask(scores,self.win_size,self.sim_thresh)
+            attn_mask = self.get_mask(scores,self.win_size,self.sim_thresh)
             scores = scores * attn_mask
 
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
     
-    def get_mask(scores,
-                 WIN_SIZE=30,
-                 SIM_THRESH=0.5):
-        
-        seq_len = scores.shape[2]
-        cache_len = scores.shape[-1] - scores.shape[-2] #cache_len
-        init_mask = torch.full(size=scores.shape[2:],fill_value=float(0)) # (seqlen, cache_len+seqlen)
-
-        # for each row, build the mask for attention
-        for i in range(init_mask.shape[0]):
-            window_scores = scores[i,min(cache_len+i-WIN_SIZE,0):cache_len+i]
-            window_idx = torch.arange(min(cache_len+i-WIN_SIZE,0),cache_len+i)
-
-            init_mask[i,window_idx] = 1.0 #attend to all window tokens 
-            
-            #TODO: select only topk from the sliding window ie,
-            # _ , window_idx = torch.topk(window_scores,dim=-1,WIN_SIZE//2)
-
-            for consultant in window_idx:
-                if consultant < cache_len:
-                    continue
-                else:
-                    init_mask[i,scores[consultant]>SIM_THRESH] = 1.0 #attend to all tokens for which consultant had similarity > thresh
-        
-        return init_mask
+    
 
 
         
