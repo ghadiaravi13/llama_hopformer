@@ -78,6 +78,7 @@ def load_model(ckpt_dir, tokenizer_path, max_seq_len, max_batch_size, hopformer,
 
 def calculate_perplexity(model, tokenizer, text, max_seq_len):
     # Use the tokenizer's encode_plus method
+    import pdb; pdb.set_trace()
     encoded = tokenizer.encode_plus(text, add_special_tokens=True, truncation=True, max_length=max_seq_len, return_tensors="pt")
     tokens = encoded['input_ids']
     
@@ -144,7 +145,7 @@ def main():
 
     # Redirect print statements to log file
     log_file = os.path.join(args.output_dir, "wikitext_ppl.log")
-    sys.stdout = open(log_file, "w")
+    # sys.stdout = open(log_file, "w")
     
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if world_size > 1:

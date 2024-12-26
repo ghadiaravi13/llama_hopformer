@@ -257,6 +257,7 @@ class Attention(nn.Module):
         ).cuda()
     
     def get_mask(self, scores, WIN_SIZE, SIM_THRESH):
+        import pdb; pdb.set_trace()
         bsz, n_heads, seq_len, total_len = scores.shape
         cache_len = total_len - seq_len
         init_mask = torch.zeros_like(scores)
@@ -325,6 +326,7 @@ class Attention(nn.Module):
         values = values.transpose(1, 2) # (bs, n_local_heads, cache_len + seqlen, head_dim)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
         
+        import pdb; pdb.set_trace()
 
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
